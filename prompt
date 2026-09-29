@@ -1,0 +1,1096 @@
+# Task: Implement Phase 1 of the QA Agentic Platform
+
+You are implementing the first vertical slice of a larger on-premise QA Agentic Platform.
+
+Do NOT attempt to implement the entire platform.
+
+The goal of this phase is to build a clean architectural foundation that will later support many additional agent teams and workflows.
+
+---
+
+# 1. Phase Goal
+
+Implement the following workflow:
+
+PRD Source
+    ↓
+Requirement Intake Specialist
+    ↓
+Requirement Analysis Specialist
+    ↓
+Test Generation Specialist
+    ↓
+Coverage Validation Specialist
+    ↓
+    ├── PASS → Persist validated tests
+    │
+    └── REVISE → Test Generation Specialist
+                     ↓
+                Validate again
+
+The PRD will initially come from Confluence.
+
+The workflow must use:
+
+- Python
+- LangGraph
+- Pydantic
+- Pydantic Settings
+- MongoDB
+- local LLM endpoint
+- Confluence MCP
+- structured agent outputs
+
+No external/cloud LLM APIs are allowed.
+
+---
+
+# 2. Important Architecture Rules
+
+Follow these rules strictly.
+
+## 2.1 LangGraph owns orchestration
+
+The LLM must NOT control the entire workflow.
+
+LangGraph controls:
+
+- state
+- routing
+- retry
+- revision loops
+- specialist invocation
+- checkpoints
+- error states
+
+For example:
+
+if coverage_result.status == "PASS":
+    continue to persistence
+
+if coverage_result.status == "REVISE":
+    return to Test Generation Specialist
+
+Do NOT ask an LLM to decide what PASS or REVISE means.
+
+---
+
+## 2.2 Agents are specialists
+
+Do NOT build one giant agent.
+
+Implement four specialists:
+
+1. Requirement Intake Specialist
+2. Requirement Analysis Specialist
+3. Test Generation Specialist
+4. Coverage Validation Specialist
+
+Each specialist must have:
+
+- explicit input model
+- explicit output model
+- narrow responsibility
+- scoped context
+- explicit tools
+- no unnecessary tools
+
+---
+
+## 2.3 Use Pydantic for every important boundary
+
+Do not pass uncontrolled free-form text between specialists.
+
+Use Pydantic models for:
+
+- workflow request
+- requirement package
+- structured requirement model
+- test case
+- test suite
+- validation result
+- workflow state
+- errors
+- persisted records
+
+The LLM response must be validated against the expected Pydantic schema.
+
+If model output is invalid:
+
+1. attempt one structured retry
+2. include validation error feedback
+3. fail cleanly if still invalid
+
+---
+
+# 3. Model Requirements
+
+The system runs only internal/local models.
+
+Current primary models:
+
+- GLM 5.3
+- GLM 5.3 Flash
+
+Design a model abstraction so the rest of the code does not depend directly on GLM.
+
+Example concept:
+
+class ModelProfile(BaseModel):
+    name: str
+    base_url: str
+    model_name: str
+    multimodal: bool
+    structured_output: bool
+    context_window: int | None
+
+Create a generic model gateway such as:
+
+LocalModelClient
+
+or:
+
+ModelGateway
+
+The specialist should reference a model profile, not hardcode the model.
+
+For this phase:
+
+Requirement Analysis:
+    reasoning_default
+
+Test Generation:
+    reasoning_default
+
+Coverage Validation:
+    reasoning_default
+
+GLM 5.3 should initially be the reasoning_default model.
+
+GLM 5.3 Flash should be supported by configuration but is not required for visual input in this phase.
+
+Do not duplicate agent logic for different models.
+
+---
+
+# 4. Confluence Access
+
+The Requirement Intake Specialist reads the PRD using the existing Confluence MCP.
+
+The specialist receives something like:
+
+PRD URL
+or
+Confluence page reference
+
+The MCP layer should be wrapped behind our own adapter.
+
+Example:
+
+class ConfluenceService:
+    async def get_page(...):
+        ...
+
+Do not spread MCP-specific response structures throughout the codebase.
+
+Convert MCP results into internal domain models.
+
+The rest of the application must not care whether the requirement came from:
+
+- Confluence MCP
+- future Jira requirement
+- uploaded document
+- another source
+
+Create an abstraction that makes this extensible.
+
+---
+
+# 5. Agent 01 — Requirement Intake Specialist
+
+## Responsibility
+
+Retrieve the correct PRD and prepare a normalized requirement package.
+
+## Input
+
+RequirementIntakeRequest
+
+Suggested fields:
+
+- source_type
+- source_reference
+- session_id
+- project_id optional
+
+Example:
+
+{
+  "source_type": "confluence",
+  "source_reference": "https://...",
+  "session_id": "..."
+}
+
+## Tools
+
+Confluence MCP only.
+
+Possibly Jira read-only later, but not required for the first implementation.
+
+## Output
+
+RequirementPackage
+
+Suggested structure:
+
+class RequirementPackage(BaseModel):
+    requirement_set_id: str
+    title: str
+    source_type: str
+    source_reference: str
+    source_version: str | None
+    raw_content: str
+    retrieved_at: datetime
+
+## Important
+
+The Intake Specialist should do very little reasoning.
+
+Its main job is acquisition and normalization.
+
+Do not make it generate tests.
+
+---
+
+# 6. Agent 02 — Requirement Analysis Specialist
+
+## Responsibility
+
+Convert the PRD into a structured requirement representation.
+
+## Input
+
+RequirementPackage
+
+## Output
+
+StructuredRequirementModel
+
+Suggested models:
+
+class RequirementItem(BaseModel):
+    id: str
+    title: str
+    description: str
+    acceptance_criteria: list[str]
+    business_rules: list[str]
+    dependencies: list[str]
+    preconditions: list[str]
+    source_reference: str
+
+class RequirementAmbiguity(BaseModel):
+    requirement_id: str | None
+    description: str
+    severity: Literal["LOW", "MEDIUM", "HIGH"]
+
+class StructuredRequirementModel(BaseModel):
+    requirement_set_id: str
+    title: str
+    requirements: list[RequirementItem]
+    ambiguities: list[RequirementAmbiguity]
+    contradictions: list[str]
+    assumptions: list[str]
+
+## Behavior
+
+The specialist should:
+
+- extract functional requirements
+- extract acceptance criteria
+- identify business rules
+- identify dependencies
+- identify preconditions
+- identify ambiguity
+- identify contradictions
+
+It must NOT silently resolve important ambiguity.
+
+If serious ambiguity exists, expose it in structured output.
+
+For v1:
+
+HIGH ambiguity should stop the workflow with:
+
+NEED_HUMAN_REVIEW
+
+Do not yet build the full Human-in-the-Loop UI.
+
+Persist the state and return a clear status so HITL can be added next.
+
+---
+
+# 7. Agent 03 — Test Generation Specialist
+
+## Responsibility
+
+Generate high-quality logical test cases from the StructuredRequirementModel.
+
+This stage is about TEST DESIGN.
+
+It is NOT about automation code.
+
+Do not use Graphify.
+
+Do not generate Python automation.
+
+Do not interact with environments.
+
+## Input
+
+StructuredRequirementModel
+
+Optional:
+
+previous_validation_feedback
+
+## Output
+
+GeneratedTestSuite
+
+Suggested models:
+
+class TestStep(BaseModel):
+    order: int
+    action: str
+    expected_result: str | None
+
+class TestCase(BaseModel):
+    test_id: str
+    title: str
+    objective: str
+    requirement_ids: list[str]
+    preconditions: list[str]
+    test_data: dict | None
+    steps: list[TestStep]
+    expected_result: str
+    test_type: str | None
+    priority: str | None
+    tags: list[str]
+
+class GeneratedTestSuite(BaseModel):
+    suite_id: str
+    requirement_set_id: str
+    tests: list[TestCase]
+    generation_revision: int
+
+## Generation expectations
+
+Tests should include when appropriate:
+
+- happy path
+- negative path
+- boundary cases
+- edge cases
+- validation rules
+- permission/security-related behavior if specified
+- error handling
+- state transitions
+
+Do not invent product requirements.
+
+If an assumption is required, mark it.
+
+Maintain traceability:
+
+Requirement ID → Test IDs
+
+---
+
+# 8. Agent 04 — Coverage Validation Specialist
+
+This must be a separate specialist from the Test Generation Specialist.
+
+It acts as an independent reviewer.
+
+## Responsibility
+
+Compare:
+
+StructuredRequirementModel
+
+against:
+
+GeneratedTestSuite
+
+and determine whether the suite adequately covers the requirements.
+
+## Input
+
+- StructuredRequirementModel
+- GeneratedTestSuite
+
+## Output
+
+CoverageValidationResult
+
+Suggested models:
+
+class CoverageGap(BaseModel):
+    requirement_id: str
+    reason: str
+    suggested_fix: str
+
+class RequirementCoverage(BaseModel):
+    requirement_id: str
+    covered_by_test_ids: list[str]
+    status: Literal[
+        "COVERED",
+        "PARTIALLY_COVERED",
+        "NOT_COVERED"
+    ]
+
+class CoverageValidationResult(BaseModel):
+    status: Literal[
+        "PASS",
+        "REVISE",
+        "NEED_HUMAN_REVIEW"
+    ]
+
+    requirement_coverage: list[RequirementCoverage]
+    gaps: list[CoverageGap]
+    unsupported_assumptions: list[str]
+    duplicate_or_redundant_tests: list[str]
+    feedback: str
+
+## Validation behavior
+
+The specialist must check:
+
+- every requirement has coverage
+- acceptance criteria are represented
+- expected results are meaningful
+- negative paths are included where relevant
+- test cases do not contradict the PRD
+- unsupported assumptions are detected
+- major duplicate tests are detected
+
+If incomplete:
+
+status = REVISE
+
+The feedback is sent back to Test Generation Specialist.
+
+---
+
+# 9. Revision Loop
+
+Implement the revision loop using LangGraph.
+
+Pseudo-flow:
+
+generate_tests
+    ↓
+validate_tests
+    ↓
+if PASS:
+    persist_validated_tests
+
+if REVISE:
+    increment revision
+    send validator feedback to generator
+    generate again
+    validate again
+
+if NEED_HUMAN_REVIEW:
+    stop/pause workflow
+
+Add configuration:
+
+MAX_TEST_GENERATION_REVISIONS
+
+Suggested default:
+
+3
+
+If maximum revisions are reached:
+
+status = NEED_HUMAN_REVIEW
+
+Do not create an infinite agent loop.
+
+---
+
+# 10. LangGraph Structure
+
+Create a dedicated Requirements/Test Design subgraph.
+
+Conceptually:
+
+START
+  ↓
+intake_requirement
+  ↓
+analyze_requirement
+  ↓
+route_requirement_analysis
+
+READY
+  ↓
+generate_tests
+  ↓
+validate_tests
+  ↓
+route_validation
+
+PASS
+  ↓
+persist_validated_suite
+  ↓
+END
+
+REVISE
+  ↓
+generate_tests
+
+NEED_HUMAN_REVIEW
+  ↓
+persist_pause_state
+  ↓
+END / INTERRUPT placeholder
+
+Keep the graph modular so later it can become one subgraph inside the larger QA platform.
+
+---
+
+# 11. Workflow State
+
+Do not store huge documents directly in LangGraph state if avoidable.
+
+Use references to Mongo documents.
+
+Suggested:
+
+class RequirementsWorkflowState(TypedDict):
+    workflow_id: str
+    session_id: str
+
+    requirement_package_id: str | None
+    structured_requirement_id: str | None
+    test_suite_id: str | None
+    validation_result_id: str | None
+
+    generation_revision: int
+
+    status: str
+    error: str | None
+
+The Mongo repositories hold the full objects.
+
+---
+
+# 12. MongoDB
+
+Use MongoDB for operational persistence.
+
+For this first slice create:
+
+requirements
+
+structured_requirements
+
+test_suites
+
+coverage_validations
+
+workflow_runs
+
+Optional:
+
+sessions
+
+Each record must include:
+
+created_at
+updated_at
+schema_version
+
+Use repository classes.
+
+Example:
+
+RequirementRepository
+TestSuiteRepository
+ValidationRepository
+WorkflowRepository
+
+Do not access Mongo directly from every agent.
+
+---
+
+# 13. Persistence Pattern
+
+Persist after each important boundary.
+
+Recommended checkpoints:
+
+1. PRD retrieved
+2. requirement analysis completed
+3. test suite generated
+4. validation completed
+5. revision generated
+6. final suite validated
+
+This lets the workflow be debugged and later resumed.
+
+---
+
+# 14. Project Structure
+
+Create something similar to:
+
+qa-agent-platform/
+|
++-- app/
+|   +-- api/
+|
++-- orchestration/
+|   +-- requirements_graph.py
+|
++-- agents/
+|   +-- requirements/
+|       +-- intake.py
+|       +-- analysis.py
+|       +-- test_generation.py
+|       +-- coverage_validation.py
+|
++-- contracts/
+|   +-- requirements.py
+|   +-- tests.py
+|   +-- validation.py
+|   +-- workflow.py
+|
++-- tools/
+|   +-- confluence/
+|       +-- service.py
+|       +-- mcp_adapter.py
+|
++-- services/
+|   +-- model_gateway/
+|   +-- mongo/
+|   +-- sessions/
+|
++-- repositories/
+|   +-- requirements.py
+|   +-- tests.py
+|   +-- validations.py
+|   +-- workflows.py
+|
++-- prompts/
+|   +-- requirement_analysis_v1.md
+|   +-- test_generation_v1.md
+|   +-- coverage_validation_v1.md
+|
++-- config/
+|   +-- settings.py
+|
++-- tests/
+    +-- unit/
+    +-- integration/
+    +-- workflow/
+    +-- agent_evals/
+
+Adjust if there is a strong implementation reason, but keep clear separation.
+
+---
+
+# 15. Prompt Management
+
+Do NOT hardcode large prompts inside Python functions.
+
+Store prompts separately and version them.
+
+Example:
+
+requirement_analysis_v1.md
+test_generation_v1.md
+coverage_validation_v1.md
+
+Each agent definition should record:
+
+agent_name
+prompt_version
+model_profile
+output_schema
+
+Persist these metadata with each execution for reproducibility.
+
+---
+
+# 16. Structured Output Layer
+
+Create one reusable helper.
+
+Concept:
+
+async def run_structured_agent(
+    agent_name,
+    prompt,
+    input_data,
+    output_model,
+    model_profile,
+    tools=None
+):
+    ...
+
+Responsibilities:
+
+1. build model request
+2. include tool configuration
+3. call local model
+4. parse structured response
+5. validate with Pydantic
+6. retry once on validation error
+7. return typed result
+8. emit telemetry
+
+This becomes the reusable pattern for future agents.
+
+---
+
+# 17. Tool Layer
+
+Agents should not access MCP directly everywhere.
+
+Preferred:
+
+Agent
+    ↓
+Internal Tool Wrapper
+    ↓
+MCP Client
+    ↓
+Confluence
+
+This allows later replacement or testing.
+
+Create interfaces that can be mocked.
+
+---
+
+# 18. Error Handling
+
+Define clear error categories.
+
+Examples:
+
+SOURCE_NOT_FOUND
+MCP_ERROR
+MODEL_ERROR
+INVALID_MODEL_OUTPUT
+DATABASE_ERROR
+MAX_REVISIONS_REACHED
+NEED_HUMAN_REVIEW
+
+Failures should be typed.
+
+Do not return stack traces as agent outputs.
+
+---
+
+# 19. Logging / Observability
+
+For every specialist invocation log:
+
+workflow_id
+session_id
+agent_name
+prompt_version
+model_profile
+start_time
+end_time
+latency
+structured_output_valid
+retry_count
+status
+
+For tools:
+
+tool_name
+operation
+latency
+success/failure
+
+Do not log secrets.
+
+---
+
+# 20. Testing
+
+Implement tests from the start.
+
+## Unit Tests
+
+Test:
+
+- Pydantic models
+- routers
+- revision counter
+- repository behavior
+- MCP response adapters
+
+Example:
+
+PASS -> persist
+
+REVISE -> generator
+
+NEED_HUMAN_REVIEW -> pause
+
+MAX_REVISIONS -> pause
+
+These tests must not invoke an LLM.
+
+## Integration Tests
+
+Use mocked Confluence and model responses first.
+
+Test full:
+
+PRD → tests → validation
+
+## Agent Evals
+
+Create fixtures for:
+
+1. simple complete PRD
+2. incomplete PRD
+3. ambiguous PRD
+4. generated suite missing one requirement
+5. generated suite containing unsupported assumption
+6. complete high-quality suite
+
+Use these later to compare GLM models/prompts.
+
+---
+
+# 21. Initial API
+
+Expose a minimal API.
+
+Example:
+
+POST /workflows/test-design
+
+Request:
+
+{
+    "source_type": "confluence",
+    "source_reference": "...",
+    "session_id": "..."
+}
+
+Return quickly:
+
+{
+    "workflow_id": "...",
+    "status": "STARTED"
+}
+
+Then:
+
+GET /workflows/{workflow_id}
+
+returns current state.
+
+GET /test-suites/{suite_id}
+
+returns generated test suite.
+
+Do not keep HTTP request open for the entire workflow if avoidable.
+
+---
+
+# 22. Minimal UI Requirement
+
+UI implementation is NOT part of this phase unless already available.
+
+Backend must provide enough status for a UI to display:
+
+PRD Retrieved
+Analyzing Requirements
+Generating Tests
+Validating Coverage
+Revision 1/3
+Validated
+Needs Human Review
+Failed
+
+---
+
+# 23. Explicit Non-Goals for This Phase
+
+Do NOT implement:
+
+- Graphify
+- automation capability discovery
+- automation code generation
+- environment management
+- execution
+- runtime validation
+- failure triage
+- contextual general chat
+- autonomous Jira bug creation
+- Zephyr Test Cycle execution
+- environment provisioning
+- OpenAI Agents SDK
+- JEV-like decision model
+
+Do not over-engineer future phases.
+
+Build clean extension points only.
+
+---
+
+# 24. Optional Zephyr Integration
+
+Do NOT block Phase 1 on Zephyr.
+
+The preferred first milestone ends at:
+
+Validated TestSuite stored in MongoDB.
+
+If Zephyr support already exists and is trivial to add, only create an interface:
+
+TestPublisher
+
+with a future implementation:
+
+ZephyrPublisher
+
+Do not make synchronous Zephyr writes part of the core test-generation workflow.
+
+---
+
+# 25. Definition of Done
+
+The implementation is complete when:
+
+1. A user can submit a Confluence PRD reference.
+2. The PRD is retrieved through the Confluence MCP adapter.
+3. Requirement Analysis returns a validated Pydantic model.
+4. Tests are generated as structured Pydantic TestCase objects.
+5. A separate Coverage Validation Specialist reviews them.
+6. Missing coverage causes an automatic revision loop.
+7. PASS ends the loop.
+8. The loop has a hard maximum revision count.
+9. Results are stored in MongoDB.
+10. Workflow state can be queried.
+11. Agent/model/tool calls are logged.
+12. All deterministic routing has unit tests.
+13. At least one full mocked end-to-end workflow test passes.
+14. The code is modular enough to later mount this workflow as a subgraph inside the complete QA Agentic Platform.
+
+---
+
+# 26. First Development Order
+
+Do the work in this order.
+
+## Step 1
+Inspect the existing repository.
+
+Do not immediately write code.
+
+Understand:
+
+- current structure
+- Python version
+- existing model clients
+- existing MCP integrations
+- existing Mongo support
+- existing configuration
+- testing setup
+
+Produce a short implementation plan based on the actual repository.
+
+## Step 2
+Create Pydantic contracts.
+
+No agents yet.
+
+## Step 3
+Create Settings and model abstraction.
+
+## Step 4
+Create Mongo repositories.
+
+## Step 5
+Create Confluence MCP adapter.
+
+## Step 6
+Implement reusable structured-agent runner.
+
+## Step 7
+Implement Requirement Intake.
+
+## Step 8
+Implement Requirement Analysis.
+
+## Step 9
+Implement Test Generation.
+
+## Step 10
+Implement Coverage Validation.
+
+## Step 11
+Build LangGraph subgraph.
+
+## Step 12
+Add persistence/checkpoints.
+
+## Step 13
+Add unit tests.
+
+## Step 14
+Add mocked end-to-end test.
+
+## Step 15
+Run the workflow against one real PRD using GLM 5.3.
+
+## Step 16
+Evaluate output and adjust prompts only after the architecture works.
+
+---
+
+# 27. Coding Principles
+
+- Prefer simple code over framework magic.
+- Do not build abstractions before they are needed.
+- Do not introduce a second agent framework.
+- Keep LangGraph orchestration explicit.
+- Keep Pydantic contracts strict.
+- Keep tools small and permissioned.
+- Use dependency injection where it improves testing.
+- Keep model-specific logic inside the model gateway.
+- Keep MCP-specific logic inside adapters.
+- Keep Mongo-specific logic inside repositories.
+- Make every specialist independently testable.
+- Never silently swallow schema failures.
+- Never allow unbounded agent loops.
+- Prefer deterministic code whenever AI reasoning is unnecessary.
+
+---
+
+# 28. Before Coding
+
+Before modifying the repository, return:
+
+1. Current repository assessment
+2. Files/modules that should be created or changed
+3. Exact implementation sequence
+4. Any missing dependency or unknown
+5. Any architecture conflict you found
+
+Then start implementation unless a blocking ambiguity exists.
+
+Do not redesign the architecture without a concrete technical reason.
