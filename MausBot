@@ -1,0 +1,106 @@
+Set up OpenMausBot (https://github.com/milind-soni/OpenMausBot) from source on this
+work Mac for desktop use, with NO data leaving the organisation. Explain each step
+before running it. Stop and ask me before anything marked [ASK].
+
+HARD RULES
+- No sudo, no system-wide installs, no changing macOS security settings (Gatekeeper,
+  firewall, profiles, MDM). If a step seems to need one, stop and [ASK].
+- Do NOT install Ollama or download any LLM model. Models come from our existing
+  LiteLLM proxy (see step 7).
+- Do NOT set up Composio, Cloudflare tunnel, Tailscale, Boat, OMB Cloud, hosted voice
+  keys (ElevenLabs/Fish/xAI), or any image-generation provider.
+- Never print, log, or commit secrets. I will type API keys myself; do not ask me to
+  paste them into chat.
+- Do not claim anything works without evidence (command output, logs). Read AGENTS.md
+  and docs/verification/README.md in the repo before claiming a server change works.
+
+1. PREREQUISITES
+   - Check `node -v` (need Node 24+), `pnpm -v` (else `corepack enable`), `git --version`.
+   - If Node is older than 24, STOP and tell me. Prefer a user-level install (fnm/nvm)
+     over a system install. [ASK] before installing anything.
+
+2. CLONE
+   - [ASK] where to clone (default ~/dev/OpenMausBot). Then
+     `git clone https://github.com/milind-soni/OpenMausBot {INSTALL_DIR}`.
+
+3. DISABLE ANALYTICS / OUTBOUND REPORTING (BEFORE `pnpm install`)
+   a. src/lib/analytics.ts: make initAnalytics() return immediately (first line
+      `return; // analytics disabled for internal build`). This stops PostHog entirely,
+      including email identify. Show me the git diff.
+   b. Confirm electron/cua.mjs still forces CUA_DRIVER_RS_TELEMETRY_ENABLED=0.
+   c. The bundled Cua driver also checks GitHub for updates. Set
+      CUA_DRIVER_RS_UPDATE_CHECK=false (export it in the shell that launches the app,
+      and add it to the CUA_ENV object in electron/cua.mjs). Verify the
+      "cua-driver vX is available" message no longer appears. Unverified that this
+      variable works on macOS, so check.
+   d. Packaged builds only: electron/updater.mjs startUpdater() checks GitHub 15s after
+      launch and hourly. [ASK] me, then make it a no-op for this internal build.
+      (It is already dormant for unpackaged `pnpm dev:desktop` runs.)
+   e. Set WRANGLER_SEND_METRICS=false and NEXT_TELEMETRY_DISABLED=1 in the shell.
+   f. Search the repo (src, electron, server, shared, companion, scripts, index.html)
+      for any OTHER outbound calls: analytics/telemetry/crash reporters, hard-coded
+      third-party hosts, fetch() to non-local URLs. Report findings; don't assume the
+      list above is complete.
+   g. If the OpenCode engine is used, check its own config for session sharing or
+      telemetry and set sharing to disabled. Report what you find.
+   h. In the app: Settings -> General -> turn analytics off as a second layer, and skip
+      the first-run email prompt.
+
+4. INSTALL
+   - `cd {INSTALL_DIR} && pnpm install` (corepack may fetch the repo-pinned pnpm).
+   - Leave pnpm's ignored build scripts (core-js, workerd) blocked.
+   - I may need to approve my corporate proxy or registry mirror. [ASK] if the install
+     can't reach the npm registry or GitHub (Electron binary download).
+
+5. DESKTOP BUILD
+   - Read the "Package the desktop application" section of README.md and the
+     package:mac / dev:desktop entries in package.json, then recommend ONE option:
+       A) Run from source: three terminals (pnpm dev:server, pnpm dev, pnpm dev:desktop).
+          Note dev:desktop first runs scripts/prepare-cloudflared.mjs, which downloads a
+          pinned cloudflared binary from github.com/cloudflare/cloudflared. It does not
+          start a tunnel. [ASK] before running it.
+       B) Build a local unsigned app with `pnpm package:mac` (needs Xcode command line
+          tools; Gatekeeper may block an unsigned app). [ASK] before running it.
+   - Do NOT install the official prebuilt DMG from GitHub releases: it ships with
+     PostHog analytics and the auto-updater enabled, and my patch would not apply.
+   - Never run two harness servers at once (they share a data-dir lock).
+
+6. macOS PERMISSIONS FOR "THIS COMPUTER" (local computer control)
+   - macOS needs Screen Recording and Accessibility granted to the app, then quit and
+     reopen it. I will grant them myself in System Settings; tell me when.
+   - In source mode the server falls back to ~/Library/Application Support/openmausbot
+     for the Cua connection file. Only set OMB_USER_DATA if the app reports
+     "CUA Driver is not ready".
+
+7. MODELS VIA LITELLM (NO LOCAL MODELS)
+   - Ask me for: LiteLLM base URL {LITELLM_BASE_URL} (must be an internal
+     org host ending in /v1), model alias {LITELLM_MODEL_NAME}, and the env-var name for
+     the key. I will enter the key myself.
+   - Add an instance to ~/.openmausbot/config.json under "instances" (back the file up
+     first, merge don't overwrite):
+       "litellm": {
+         "driver": "openai-compat",
+         "displayName": "Company LiteLLM",
+         "environment": { "LITELLM_KEY": "<I will fill this in>" },
+         "config": { "url": "{LITELLM_BASE_URL}", "apiKeyEnv": "LITELLM_KEY",
+                     "model": "{LITELLM_MODEL_NAME}" }
+       }
+     (keys are stored in plaintext, mode 0600; use a key scoped to this use only.)
+     Set config.tools=false only if the model has no tool support.
+   - Restart the harness (instances are read at startup).
+   - In the New Bot dialog, set the default model to this instance so no bot defaults to
+     an external provider. Don't sign in to any other provider.
+
+8. VERIFY (show evidence for each)
+   - git diff shows only the intended changes.
+   - Servers listen on 127.0.0.1 only (8799 harness, 5199 app).
+   - In the app's DevTools Network tab, filter "posthog": no requests.
+   - `lsof -i -P -n | grep -E "OpenMausBot|Electron|node"` while the app idles and
+     during a chat: the only non-local destination is the LiteLLM host (plus github.com
+     while the cloudflared/Electron downloads run).
+   - Send a test message through the LiteLLM-backed bot and show it replies.
+
+9. REPORT
+   - Summarise: changes made (diff), every outbound destination observed, anything
+     left on that could reach outside the org, and the exact commands to start and stop
+     the app.
