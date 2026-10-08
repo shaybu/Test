@@ -1,0 +1,20 @@
+Read PLAN.md. We're starting the build. Already done and confirmed on this Mac:
+
+- OpenMausBot is the installed (packaged) desktop app, not dev mode. Full access works.
+- Both Android MCPs work. Tested with 3 devices. Real names: <android-core name>, <android-im name>.
+- You (Claude Code) can reach the desktop app's local API.
+
+Start Phase 0, but skip what's already confirmed. Still verify:
+1. Whether API writes work (create a test bot), not just reads. If blocked, set up
+   local pairing for the OpenMausBot MCP server (Settings → Phone → pairing code).
+2. How each Android MCP targets a specific device (serial parameter or env var).
+3. android-core's phone-number extraction, and what android-im reports for unread
+   (per app / per chat).
+4. Chief of Staff create_bot with a working folder: does it ask for approval?
+5. Do bots load .mcp.json and .claude/settings.json from their working folder?
+
+Reminders:
+- Fleet bots run on Ask with only their MCP tools pre-approved, not Full access.
+  Other projects share this OpenMausBot.
+- Never guess paths or names. Ask me.
+- Stop at every stage gate and wait for my OK.
