@@ -1,0 +1,112 @@
+Project Fibonacci — Initial Setup and Migration
+
+You are my senior Python and Agentic AI architect.
+
+We are migrating an existing QA automation agentic system called Fibonacci from Open Mouse Boot to the open-source LangChain ecosystem.
+
+Our technology stack will be:
+
+- LangGraph — workflow orchestration, state management, branching, and human-in-the-loop.
+- LangChain — model integration, agents, and tools.
+- Pydantic — structured schemas and validation.
+- Graphify — existing codebase knowledge graph and capability discovery.
+
+We are NOT using Deep Agents at this stage.
+
+Existing system
+
+Three components currently work in Open Mouse Boot:
+
+1. Chief of Staff — receives a natural-language QA automation request and routes the work.
+2. Capability Discovery Agent — uses an existing Graphify integration to identify reusable automation capabilities, code references, and missing functionality.
+3. Test Designer Agent — generates Python pytest automation code using the Capability Map, even when some capabilities are missing.
+
+The existing agent instructions are stored in SOUL.md files.
+
+Graphify is already installed and has mapped our local automation repository. Do not rebuild or re-index it unless explicitly authorized.
+
+Future features will include Gap Analysis, Jira integration, Bitbucket integration, human approval gates, and parallel workflows.
+
+Phase 1 — Create the project
+
+1. Inspect the current development environment.
+2. Verify that Python 3.11 or newer is installed.
+3. Create a separate project directory named "fibonacci".
+4. Open the project in VS Code on macOS.
+5. Create a project-local Python virtual environment named ".venv".
+6. Configure VS Code to use the virtual environment interpreter.
+7. Create ".gitignore" to exclude ".venv", ".env", caches, and secrets.
+
+Do not modify the existing Open Mouse Boot project.
+
+Phase 2 — Install dependencies
+
+Use only approved package sources and open-source packages.
+
+Install:
+
+- langgraph
+- langchain
+- langchain-openai
+- pydantic
+- python-dotenv
+
+Use "langchain-openai" only if our internal GLM endpoint is OpenAI-compatible. Otherwise, identify the appropriate supported integration.
+
+Verify imports and save exact dependency versions in "requirements.txt".
+
+Do not install Deep Agents, LangSmith, or any cloud-hosted runtime.
+
+Phase 3 — Verify integrations
+
+1. Identify our internal GLM model endpoint and authentication method.
+2. Test model connectivity without exposing credentials.
+3. Inspect how Graphify currently integrates with Open Mouse Boot.
+4. Determine whether Graphify exposes MCP, Python APIs, or another interface.
+5. Inspect the existing Capability Map JSON structure.
+6. Propose a reusable Graphify adapter without modifying the existing Graphify implementation.
+
+Phase 4 — Design the architecture
+
+Create a modular Python project structure containing:
+
+- "agents/"
+- "graph/"
+- "tools/"
+- "schemas/"
+- "config/"
+- "tests/"
+
+Define a shared workflow state and structured contracts between components.
+
+Design the initial workflow:
+
+User Request → Chief of Staff → Capability Discovery → Test Designer → Result
+
+The Chief of Staff handles request routing, not test generation.
+
+Leave architectural extension points for future parallel Gap Analysis, code implementation, Jira/Bitbucket integrations, and human-in-the-loop checkpoints.
+
+Important constraints
+
+- Everything must run on-premises.
+- No external model APIs or cloud telemetry.
+- Do not modify the existing automation repository.
+- Do not overwrite existing SOUL.md files.
+- Do not invent missing capabilities or Graphify interfaces.
+- Preserve the existing agent behavior.
+- Do not introduce unnecessary frameworks.
+- Do not implement future agents yet.
+- Use synthetic data for initial testing.
+
+Execution instructions
+
+Work incrementally.
+
+First, inspect the environment and propose the project setup. Then create the isolated environment and install the approved dependencies.
+
+After verifying the environment, present the proposed architecture and migration plan for review.
+
+Do not migrate the existing agents or make repository changes until I approve the architecture.
+
+At each stage, report what was completed, what was verified, and what remains.
